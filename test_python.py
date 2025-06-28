@@ -1,11 +1,27 @@
-# simplified_patent_analyzer.py - Complete system in one file
+# test_python.py
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.cluster import KMeans
-import docx
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    st.warning("Plotly not available. Using basic charts.")
+
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.cluster import KMeans
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+
+try:
+    import docx
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
 import re
 from datetime import datetime
 import numpy as np
@@ -17,114 +33,99 @@ st.set_page_config(
     layout="wide"
 )
 
-class PatentAnalyzer:
-    def __init__(self):
-        self.data = None
+def safe_process_docx(uploaded_file):
+    """Safely process DOCX file with fallback"""
+    if not DOCX_AVAILABLE:
+        st.error("python-docx not available. Please check requirements.txt")
+        return pd.DataFrame()
+    
+    try:
+        doc = docx.Document(uploaded_file)
+        patents_data = []
+        current_patent = {}
         
-    def process_docx(self, uploaded_file):
-        """Process uploaded DOCX file"""
-        try:
-            doc = docx.Document(uploaded_file)
-            patents_data = []
-            current_patent = {}
-            
-            for paragraph in doc.paragraphs:
-                text = paragraph.text.strip()
-                if not text:
-                    continue
-                    
-                # Extract patent info
-                if "Patent Number:" in text or "US" in text[:10]:
-                    if current_patent:
-                        patents_data.append(current_patent)
-                    current_patent = {'patent_number': text}
-                elif "Title:" in text:
-                    current_patent['title'] = text.replace("Title:", "").strip()
-                elif "Inventor" in text:
-                    current_patent['inventors'] = text.split(":")[-1].strip()
-                elif "Assignee:" in text:
-                    current_patent['assignee'] = text.replace("Assignee:", "").strip()
-                elif "Date:" in text:
-                    current_patent['date'] = text.split(":")[-1].strip()
-                elif "Abstract" in text:
-                    current_patent['abstract'] = text.replace("Abstract:", "").strip()
-                elif len(text) > 50 and 'abstract' not in current_patent:
-                    current_patent['abstract'] = text
-                    
-            if current_patent:
+        for paragraph in doc.paragrapars:
+            text = paragraph.text.strip()
+            if not text:
+                continue
+                
+            # Simple text parsing
+            if "patent" in text.lower() and len(current_patent) > 0:
                 patents_data.append(current_patent)
+                current_patent = {}
+            
+            # Extract basic info
+            if ":" in text:
+                key, value = text.split(":", 1)
+                key = key.lower().strip()
+                value = value.strip()
                 
-            return pd.DataFrame(patents_data)
-        except Exception as e:
-            st.error(f"Error processing file: {e}")
-            return pd.DataFrame()
-    
-    def create_technology_clusters(self, df, n_clusters=5):
-        """Create technology clusters"""
-        if 'abstract' not in df.columns or df['abstract'].isna().all():
-            return df, {}
-            
-        abstracts = df['abstract'].fillna('').astype(str)
-        vectorizer = TfidfVectorizer(max_features=100, stop_words='english')
-        
-        try:
-            tfidf_matrix = vectorizer.fit_transform(abstracts)
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-            clusters = kmeans.fit_predict(tfidf_matrix)
-            
-            df['cluster'] = clusters
-            
-            # Get keywords for each cluster
-            feature_names = vectorizer.get_feature_names_out()
-            keywords = {}
-            for i in range(n_clusters):
-                top_indices = kmeans.cluster_centers_[i].argsort()[-5:][::-1]
-                keywords[i] = [feature_names[idx] for idx in top_indices]
+                if "patent" in key or "number" in key:
+                    current_patent['patent_number'] = value
+                elif "title" in key:
+                    current_patent['title'] = value
+                elif "inventor" in key:
+                    current_patent['inventors'] = value
+                elif "assignee" in key:
+                    current_patent['assignee'] = value
+                elif "date" in key:
+                    current_patent['date'] = value
+                elif "abstract" in key:
+                    current_patent['abstract'] = value
+            elif len(text) > 50 and 'abstract' not in current_patent:
+                current_patent['abstract'] = text
                 
-            return df, keywords
-        except:
-            df['cluster'] = 0
-            return df, {0: ['technology']}
-    
-    def analyze_trends(self, df):
-        """Analyze patent trends"""
-        if 'date' not in df.columns:
-            return None
+        if current_patent:
+            patents_data.append(current_patent)
             
-        # Extract years from dates
-        years = []
-        for date_str in df['date'].fillna(''):
-            year_match = re.search(r'20\d{2}', str(date_str))
-            if year_match:
-                years.append(int(year_match.group()))
-            else:
-                years.append(2020)  # Default year
-                
-        df['year'] = years
-        yearly_counts = df.groupby('year').size().reset_index(name='count')
-        return yearly_counts
-    
-    def identify_key_players(self, df):
-        """Identify key players"""
-        if 'assignee' not in df.columns:
-            return None
-            
-        assignee_counts = df['assignee'].value_counts().head(10)
-        return assignee_counts
+        return pd.DataFrame(patents_data)
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
+        return pd.DataFrame()
+
+def create_simple_chart(data, chart_type="bar"):
+    """Create charts with fallback to basic Streamlit charts"""
+    if PLOTLY_AVAILABLE:
+        if chart_type == "bar":
+            fig = px.bar(x=data.index, y=data.values, title="Analysis Results")
+            st.plotly_chart(fig, use_container_width=True)
+        elif chart_type == "line":
+            fig = px.line(x=data.index, y=data.values, title="Trend Analysis")
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        # Fallback to Streamlit's built-in charts
+        if chart_type == "bar":
+            st.bar_chart(data)
+        elif chart_type == "line":
+            st.line_chart(data)
 
 def main():
     st.title("🔬 Patent Intelligence Analysis System")
     st.markdown("### Upload and Analyze Patent Documents")
     
-    analyzer = PatentAnalyzer()
+    # Check dependencies
+    st.sidebar.title("System Status")
+    st.sidebar.write("✅ Streamlit: Available")
+    st.sidebar.write("✅ Pandas: Available")
+    st.sidebar.write(f"{'✅' if PLOTLY_AVAILABLE else '❌'} Plotly: {'Available' if PLOTLY_AVAILABLE else 'Not Available'}")
+    st.sidebar.write(f"{'✅' if SKLEARN_AVAILABLE else '❌'} Scikit-learn: {'Available' if SKLEARN_AVAILABLE else 'Not Available'}")
+    st.sidebar.write(f"{'✅' if DOCX_AVAILABLE else '❌'} Python-docx: {'Available' if DOCX_AVAILABLE else 'Not Available'}")
     
-    # Sidebar
+    # Navigation
     st.sidebar.title("Navigation")
     page = st.sidebar.selectbox("Select Analysis", 
-                               ["Upload Data", "Technology Landscape", "Trends", "Key Players"])
+                               ["Upload Data", "Basic Analysis", "Sample Demo"])
     
     if page == "Upload Data":
         st.header("📤 Upload Patent Data")
+        
+        if not DOCX_AVAILABLE:
+            st.error("⚠️ python-docx package not available. Please check your requirements.txt file.")
+            st.code("""
+# Add this to your requirements.txt:
+python-docx==0.8.11
+            """)
+            return
         
         uploaded_file = st.file_uploader(
             "Choose a DOCX file with patent information",
@@ -133,88 +134,67 @@ def main():
         
         if uploaded_file:
             with st.spinner("Processing document..."):
-                df = analyzer.process_docx(uploaded_file)
+                df = safe_process_docx(uploaded_file)
                 
             if not df.empty:
                 st.success(f"✅ Processed {len(df)} patents")
                 st.session_state['patent_data'] = df
-                st.dataframe(df.head())
-                
-                # Basic stats
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Patents", len(df))
-                with col2:
-                    if 'assignee' in df.columns:
-                        st.metric("Unique Assignees", df['assignee'].nunique())
-                with col3:
-                    if 'date' in df.columns:
-                        st.metric("Date Range", "2020-2024")  # Simplified
+                st.dataframe(df)
             else:
-                st.error("No data could be extracted")
+                st.error("No data could be extracted from the document")
     
-    elif page == "Technology Landscape":
+    elif page == "Basic Analysis":
         if 'patent_data' not in st.session_state:
             st.warning("Please upload data first")
             return
             
-        st.header("📊 Technology Landscape")
+        st.header("📊 Basic Patent Analysis")
         df = st.session_state['patent_data']
         
-        n_clusters = st.slider("Number of clusters", 3, 8, 5)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Patents", len(df))
+        with col2:
+            if 'assignee' in df.columns:
+                st.metric("Unique Assignees", df['assignee'].nunique())
+        with col3:
+            if 'inventors' in df.columns:
+                inventor_count = len([inv for inventors in df['inventors'].dropna() 
+                                    for inv in str(inventors).split(',')])
+                st.metric("Total Inventors", inventor_count)
         
-        if st.button("Generate Landscape"):
-            with st.spinner("Creating technology clusters..."):
-                clustered_df, keywords = analyzer.create_technology_clusters(df, n_clusters)
-                
-                # Visualization
-                if 'cluster' in clustered_df.columns:
-                    fig = px.scatter(clustered_df, 
-                                   x='cluster', 
-                                   y=range(len(clustered_df)),
-                                   color='cluster',
-                                   title="Technology Clusters",
-                                   hover_data=['title'] if 'title' in clustered_df.columns else None)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Show keywords
-                    st.subheader("Cluster Keywords")
-                    for cluster_id, words in keywords.items():
-                        st.write(f"**Cluster {cluster_id}:** {', '.join(words)}")
+        # Simple visualizations
+        if 'assignee' in df.columns:
+            st.subheader("Top Assignees")
+            assignee_counts = df['assignee'].value_counts().head(10)
+            create_simple_chart(assignee_counts, "bar")
     
-    elif page == "Trends":
-        if 'patent_data' not in st.session_state:
-            st.warning("Please upload data first")
-            return
-            
-        st.header("📈 Patent Trends")
-        df = st.session_state['patent_data']
+    elif page == "Sample Demo":
+        st.header("🎯 Sample Patent Analysis Demo")
         
-        trends = analyzer.analyze_trends(df)
-        if trends is not None:
-            fig = px.line(trends, x='year', y='count', 
-                         title="Patent Publications Over Time",
-                         markers=True)
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.dataframe(trends)
-    
-    elif page == "Key Players":
-        if 'patent_data' not in st.session_state:
-            st.warning("Please upload data first")
-            return
-            
-        st.header("👥 Key Players")
-        df = st.session_state['patent_data']
+        # Create sample data
+        sample_data = pd.DataFrame({
+            'patent_number': ['US10123456', 'US10123457', 'US10123458', 'US10123459', 'US10123460'],
+            'title': ['AI System for Data Analysis', 'Machine Learning Algorithm', 'Neural Network Architecture', 'Deep Learning Model', 'Computer Vision System'],
+            'assignee': ['TechCorp Inc', 'AI Innovations', 'TechCorp Inc', 'DataSoft LLC', 'AI Innovations'],
+            'year': [2021, 2022, 2022, 2023, 2023]
+        })
         
-        players = analyzer.identify_key_players(df)
-        if players is not None:
-            fig = px.bar(x=players.values, y=players.index, 
-                        orientation='h',
-                        title="Top Patent Assignees")
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.dataframe(players.reset_index())
+        st.subheader("Sample Patent Dataset")
+        st.dataframe(sample_data)
+        
+        # Sample analysis
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Patents by Assignee")
+            assignee_counts = sample_data['assignee'].value_counts()
+            create_simple_chart(assignee_counts, "bar")
+        
+        with col2:
+            st.subheader("Patents by Year")
+            year_counts = sample_data['year'].value_counts().sort_index()
+            create_simple_chart(year_counts, "line")
 
 if __name__ == "__main__":
     main()
